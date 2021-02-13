@@ -25,6 +25,7 @@ library(ggrepel) # nice looking labels ggplot
 library(directlabels) # for adding labels direct to geom_segment(ggplot2)
 library(robCompositions) # for robust pca
 load('../uclust_otus/z_seqs/base_files/base_file_factory/phylo_liberia.phyloseq')#data1
+data1<- readr::read_rds("inputs/liberia_gw_phylo.rds") #load('../uclust_otus/z_seqs/base_files/base_file_factory/phylo_liberia.phyloseq')#data1
 source("scripts/utils.R")
 ```
 
