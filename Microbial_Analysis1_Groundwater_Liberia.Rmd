@@ -1,0 +1,506 @@
+---
+title: "Microbial Figs - Exploratory Data Analysis"
+author: "Zack Arno"
+date: "May 2020"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+echo = T,
+message = FALSE,
+warning = FALSE,
+out.width = "100%"
+)
+
+
+library(tidyverse)
+library(phyloseq) #  package for sequencing data
+# library(Hmisc)
+library(vegan) #  package for sequencing data
+library(ggrepel) # nice looking labels ggplot
+library(directlabels) # for adding labels direct to geom_segment(ggplot2)
+library(robCompositions) # for robust pca
+load('../uclust_otus/z_seqs/base_files/base_file_factory/phylo_liberia.phyloseq')#data1
+source("scripts/utils.R")
+```
+
+
+# Setup
+This section cleans up the data, merges duplicates samples and prunes out species constituting < 1 % abundance
+
+```{r}
+
+
+# tidy up data ------------------------------------------------------------
+
+data_pruned<-prune_taxa(taxa_sums(data1) > 0, data1)
+
+
+original_tax_table<-as(tax_table(data_pruned),"matrix") %>% data.frame()
+cleaned_tax_table<-original_tax_table %>%
+  rownames_to_column() %>%
+  filter(Kingdom %in% c("Bacteria","Archaea"),
+         Family !="mitochondria"|is.na(Family),
+         Class!="Chloroplast"|is.na(Class)) %>%
+  column_to_rownames("rowname") %>% as.matrix()
+
+tax_table(data_pruned)<-cleaned_tax_table
+
+
+# rarefy ------------------------------------------------------------------
+
+data_rarefined<-rarefy_even_depth(data_pruned,rngseed = 711)
+
+
+
+# Rename well column ------------------------------------------------------
+
+sample_data(data_rarefined)$well_no <- as.character(gsub("..$","",get_variable(data_rarefined, "Z_ID")))
+
+# mege duplicates ---------------------------------------------------------
+
+data_samples_merged<-merge_samples(data_rarefined,"well_no")
+#add refseq data to merge
+data_samples_merged<-merge_phyloseq(data_samples_merged,refseq(data_rarefined))
+
+
+# Pruning & Normalizing------------------------------------------------
+
+# normalize to 100 %
+data_samples_normalized = transform_sample_counts(data_samples_merged, function(x) 1E2 * x/sum(x))
+
+abundance_threshold<-1
+
+df_taxa_pruned_to_threshold<-prune_taxa(taxa_sums(data_samples_normalized) > abundance_threshold, data_samples_normalized)
+
+#normalize to 100 %
+df_taxa_pruned_renormalized= transform_sample_counts(df_taxa_pruned_to_threshold, function(x) 1E2*x/sum(x))
+
+
+sample_data(df_taxa_pruned_renormalized)$well_no<-as.factor(sample_data(df_taxa_pruned_renormalized)$well_no)
+
+df_normalized_phy_glom<-tax_glom(df_taxa_pruned_renormalized,taxrank="Phylum")
+
+
+```
+
+
+# Microbial Community Structure
+
+I would be interested in seeing which of these bar plot variations you thought would be best for the paper. They all break down microbial community structure, but do so in different ways.
+
+This plot shows the % abunance of all of the phylum > 1 % abundant. Prior to graphing, all of the data has been aggregated to the phylum level
+
+```{r}
+
+
+major_phylum_bp1<-plot_bar(df_normalized_phy_glom, "well_no", "Abundance","Phylum", title="Phylum (OTUS>1% Abundance)")+
+    ylab("Relative Abundance")+xlab("Sample") +theme_bw()+
+    theme(axis.title.x = element_text(size=16),
+          axis.text.x = element_text(angle = 70, hjust = 1,size=8, colour = "black"),
+          axis.title.y = element_text(size=16),
+          axis.text.y = element_text(angle = 90, hjust = 0.5,size=8,colour="black"),
+          plot.title = element_text(size=16, hjust=0.5,colour="black",face="bold"))+
+    scale_fill_manual(values=colv,na.value="#555555ff")+
+    ggtitle("Microbial Community Structure (OTUs > 1%)")
+major_phylum_bp1
+
+```
+
+
+
+```{r}
+# filter to top 15 --------------------------------------------------------
+# this code makes the two graph displayed below.
+
+graph_top_15_by<-c("phylum_glom","total")
+bp_top15<-list()
+for(i in 1:length(graph_top_15_by)){
+  graph_top_15_temp<-graph_top_15_by[i]
+  if(graph_top_15_temp=="total"){
+    top_15_names<-names(sort(taxa_sums(df_taxa_pruned_renormalized), decreasing=TRUE)[1:15])}
+  else{
+      top_15_names<-names(sort(taxa_sums(df_normalized_phy_glom), decreasing=TRUE)[1:15])}
+  
+  top_15<-prune_taxa(top_15_names,df_taxa_pruned_renormalized)
+  top_15_renormalized= transform_sample_counts(top_15, function(x) 1E2*x/sum(x))
+  ####paper figure-  HERES THE TICKET####
+  top_15_abundance_bp<-plot_bar(top_15_renormalized, "well_no", "Abundance","Phylum", title="Phylum (OTUS>1% Abundance)")+
+    ylab("Relative Abundance")+xlab("Sample") +theme_bw()+
+    theme(axis.title.x = element_text(size=16),
+          axis.text.x = element_text(angle = 70, hjust = 1,size=8, colour = "black"),
+          axis.title.y = element_text(size=16),
+          axis.text.y = element_text(angle = 90, hjust = 0.5,size=8,colour="black"),
+          legend.text=element_text(size=8),
+          legend.title = element_text(size=9),
+          legend.key.size = unit(0.3, "cm"),
+          legend.background = element_rect(colour = "black", fill=alpha("white",0.7)),
+          plot.margin=margin(0,0,0,0,"cm"),
+          plot.title = element_text(size=16, hjust=0.5,colour="black",face="bold"),
+          legend.position=c(0.3,0.4))+
+    scale_fill_manual(values=colv,na.value="#555555ff")+
+    ggtitle("Microbial Community Structure")
+  bp_top15[[graph_top_15_temp]]<-top_15_abundance_bp
+}
+
+```
+
+this plot is very similar to the one above except that we have decided to choose the top 15 phyla, the # 15 is arbitary and could be changed
+
+```{r}
+bp_top15$phylum_glom
+
+
+```
+
+The plot looks at all of the data (not aggregated to phylum), selects the top 15 most abundant OTUs and then aggregates then displays their abundance by Phylum. It turns out that if we just look at the top 15 OTUs they are all actually only within 4 Phylum. We could
+
+```{r}
+bp_top15$total
+
+```
+
+
+```{r}
+########write abundance table
+Phylumfac=factor(tax_table(df_normalized_phy_glom)[,"Phylum"])
+phytab = apply(otu_table(df_normalized_phy_glom), MARGIN = 1, function(x) {
+  tapply(x, INDEX = Phylumfac, FUN = sum, na.rm = TRUE, simplify = TRUE)
+})
+phytab2<-phytab[, order(as.integer(colnames(phytab)))]
+
+phytab2 %>% knitr::kable( longtable = T, booktabs = T, linesep = "",caption= "Abundance Table") 
+
+
+
+
+```
+
+
+
+It has been demonstrated that PCA/HCA results can be significantly shifted by the presence of a single outlier
+value (Xu et al., 2012; Cand`es et al., 2009; Huber, 1981)
+
+CoDa methods are increasingly being used for a wide variety of applications from geology to the food industry.
+Nonetheless, its use in hydrochemical studies is limited to several key studies.
+
+
+```{r}
+
+# in this chunk I basically add a bunch of metadata to the samples including land use, major ions, trace elements, and some data transformations geochemical data
+land_use_metadata<-read.csv('../uclust_otus/z_seqs/random_forest/all_wells_new_landuse_meta.csv', stringsAsFactors = F) %>%
+  rename(well_no="Z_ID") %>%
+  mutate(well_no=as.factor(well_no))
+
+
+
+all_metadata<-sample_data(df_taxa_pruned_renormalized) %>% data.frame() %>% left_join(land_use_metadata, by=c("well_no"))
+
+#convert to mmol for CoDa transformations
+major_ion_mmol_matrix<-convert_major_ions_to_mmol(all_metadata)
+
+
+# Robust compositional (CoDa) PCA on major ion data
+#do roobust ilr cluster analysis on major ion data-- a few types
+clst5<-quiet(clustCoDa(major_ion_mmol_matrix,k=5,method="ward.D2",vals=TRUE,scale="robust",transformation="pivotCoord"))
+clst4<-quiet(clustCoDa(major_ion_mmol_matrix,k=4,method="ward.D2",vals=TRUE,scale="robust",transformation="pivotCoord"))
+clst3<-quiet(clustCoDa(major_ion_mmol_matrix,k=3,method="ward.D2",vals=TRUE,scale="robust",transformation="pivotCoord"))
+clst2<-quiet(clustCoDa(major_ion_mmol_matrix,k=2,method="ward.D2",vals=TRUE,scale="robust",transformation="pivotCoord"))
+
+
+# normal PCA on tracel elements
+dist_matrix_trace<-dist(scale(log10(all_metadata[,trace_elements])),method="euclidean")
+trace_res<-hclust(dist_matrix_trace, method="ward.D")
+trec_res_clust4<-cutree(trace_res,4)
+trec_res_clust3<-cutree(trace_res,3)
+
+
+# merge metadata back together
+all_metadata<- all_metadata %>%
+  mutate(trace_clust4=trec_res_clust4,
+         trace_clust3=trec_res_clust3,
+         coda_clust5=clst5$cluster,
+         coda_clust4=clst4$cluster,
+         coda_clust3=clst3$cluster,
+         cod_clust2=clst2$cluster,
+         geo_class1= ifelse(Geo_New_3==1, "Crystalline","Sedimentary"),
+         geo_class2= case_when(
+           Geo_New_2==1~"Igneous",
+           Geo_New_2==2~"Metamorphic",
+           TRUE~"Sedimentary"
+         )
+
+         )
+
+
+metadata_env<-sample_data(all_metadata)
+sample_names(metadata_env)<-sample_data(metadata_env)$well_no %>% as.character()
+#extract phyloseq parts for new object
+OTU<-otu_table(df_taxa_pruned_renormalized)
+TAX<-tax_table(df_taxa_pruned_renormalized)
+PHY<-phy_tree(df_taxa_pruned_renormalized)
+REF<-refseq(df_taxa_pruned_renormalized)
+
+phylo_with_all<-phyloseq(OTU,TAX,PHY,REF,metadata_env)
+
+```
+
+
+
+# NMDS
+## Stress plot
+
+```{r}
+set.seed(711)
+NMDS1<-metaMDS(data.frame(otu_table(phylo_with_all)),trace=FALSE,try=1000,trymax=1000)
+stressplot(NMDS1)
+```
+
+
+```{r}
+# EXTRACT DATA FROM NMDS ANAYSIS FOR VIZ IN GGPLOTT
+
+#these are taxa coordinates in nmds space
+species_scores<-as.data.frame(NMDS1$species) %>% rownames_to_column("species")
+names(species_scores)[c(2, 3)] <- c("x", "y")
+species_scores$z <- NA
+
+#these are sample coordinates in nmds space
+sample_scores<-as.data.frame(NMDS1$points) %>% rownames_to_column("sample_no")
+names(sample_scores)[c(2, 3)] <- c("x", "y")
+sample_scores$z <- NA
+
+# merge coordinates with the rest of taxa data
+#
+tax_table_df=as.data.frame(phylo_with_all@tax_table@.Data) %>% rownames_to_column("species")
+
+species_nmds_data<-left_join(species_scores,tax_table_df, by="species")
+#merge sample scores and envdata by Z_ID to get env data to symbolize points
+sample_nmds_data<-data.frame(metadata_env) %>% left_join(sample_scores, by=c("well_no"="sample_no"))
+```
+
+
+## NMDS by Land cover & Geology
+
+```{r}
+NMDS_landcover_plot<-ggplot(data=species_nmds_data,aes(x=x,y=y))+
+  geom_point(aes(color=Kingdom),size=3)+
+  scale_color_manual(values=c("#E7298A","#BEAED4"))+
+  labs(x="NMDS1",y="NMDS2")+
+  geom_label_repel(data=sample_nmds_data,aes(x=x,y=y,label=well_no,fill=land_use.y),
+                   alpha=0.6,size=3, fontface = 'bold',color='black', 
+                   point.padding = unit(0,"lines"),box.padding=unit(0,"lines"))+
+  scale_fill_manual(name="Land Use",values=c("blue","red","green"),
+                    labels=c("Agriculture","City","Scattered Forest\n& Ag."))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 0, hjust = 1,size=8, colour = "black"),
+        axis.text.y = element_text(angle = 90, hjust = 0.5,size=8,colour="black"),
+        legend.text=element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.key.size = unit(0.3, "cm"),
+        legend.background = element_rect(colour = "grey", fill=alpha("white",0.6)),
+        plot.margin=margin(0,0,0,0,"cm"),
+        plot.title = element_text(size=12,hjust=0.5))+
+  ggtitle("NMDS Plot: Taxa and Samples")
+
+
+
+#### Plot by geological classification 1
+NMDS_geo_class1<-ggplot(data=species_nmds_data,aes(x=x,y=y))+geom_point(aes(color=Kingdom),size=3)+scale_color_manual(values=c("#E7298A","#BEAED4"))+
+  labs(x="NMDS1",y="NMDS2")+
+  geom_label_repel(data=sample_nmds_data,aes(x=x,y=y,label=well_no,fill=geo_class1),
+                   alpha=0.6,size=3, fontface = 'bold',color='black', point.padding = unit(0,"lines"),box.padding=unit(0,"lines"))+
+  scale_fill_manual(name="Land Use",values=c("blue","red","green"),labels=c("Crystalline","Sedimentary"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 0, hjust = 1,size=8, colour = "black"),
+        axis.text.y = element_text(angle = 90, hjust = 0.5,size=8,colour="black"),
+        legend.text=element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.key.size = unit(0.3, "cm"),
+        legend.background = element_rect(colour = "grey", fill=alpha("white",0.6)),
+        plot.margin=margin(0,0,0,0,"cm"),
+        plot.title = element_text(size=12,hjust=0.5))+
+  ggtitle("NMDS Plot: Taxa and Samples")
+
+
+# plot by geologic  classification 2
+NMDS_geo_class2<-ggplot(data=species_nmds_data,aes(x=x,y=y))+geom_point(aes(color=Kingdom),size=3)+scale_color_manual(values=c("#E7298A","#BEAED4"))+
+labs(x="NMDS1",y="NMDS2")+
+  geom_label_repel(data=sample_nmds_data,aes(x=x,y=y,label=well_no,fill=geo_class2),alpha=0.6,size=3, fontface = 'bold',color='black', point.padding = unit(0,"lines"),box.padding=unit(0,"lines"))+scale_fill_manual(name="Bedrock Geology",values=c("blue","red","green"),labels=c("Metamorphic","Igneous","Sedimentary"))+theme_bw()+
+  theme(axis.text.x = element_text(angle = 0, hjust = 1,size=8, colour = "black"),
+        axis.text.y = element_text(angle = 90, hjust = 0.5,size=8,colour="black"),
+        legend.text=element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.key.size = unit(0.3, "cm"),
+        legend.background = element_rect(colour = "grey", fill=alpha("white",0.6)),
+        plot.margin=margin(0,0,0,0,"cm"),
+        plot.title = element_text(size=12,hjust=0.5))+
+  ggtitle("NMDS Plot: Taxa and Samples")
+
+
+NMDS_landcover_plot
+NMDS_geo_class1
+NMDS_geo_class2
+```
+
+
+# Vector Fitting
+
+
+To further elucidate environmental controls and/or associations, chemical and
+environmental parameters were combined into a secondary matrix that was normalized (log10
+transformed), and standardized. Permutation-based significance tests (n=1,000) were employed to
+determine the correlation and significance of physicochemical vectors to NMDS axes using the
+envfit function (Vegan). Significant fits (p < 0.05) were plotted. Physiochemical parameters from
+
+```{r}
+# vector fitting ----------------------------------------------------------
+
+metadata_merged<-sample_data(df_taxa_pruned_renormalized) %>% data.frame()
+
+env_vars<-c("DEM_interp",
+  "elev_m", "dist_coast", "dist_river",
+  "temp_c", "pH_f", "cond_l", "pH_l", "cond_f",
+  "SWL", "TD", "WLC",  "Pop_1km", "chloride_rain",
+  "sodium_rain", "Chirps_5m_precip", "NDVI_1_yr",
+   "Ca", "Mg", "Na", "K",
+  "HCO3", "SO4", "Cl", "NO3", "SiO2", "Al", "V", "Cr", "Mn", "Fe",
+  "Co", "Ni", "Cu", "Zn", "Sr", "Mo", "Cd", "Sb", "Ba", "Pb", "U",
+  "As", "Se")
+
+#can look at all distributions with this object if wanted
+env_distributitons<-metadata_merged %>%
+   select(env_vars) %>%
+   rownames_to_column() %>%
+   pivot_longer(-rowname, names_to= "param", values_to = "vals") %>%
+   ggplot()+geom_histogram(aes(x=vals)) + facet_wrap(~param)
+
+
+# Lets tranform the vectors towards normality and scale them
+# scale and log10 transform - they all appear more lognormal than normal and they need to be scaled
+env_data_to_vecfit<-metadata_merged %>%
+  select(env_vars) %>%
+  mutate_all(.funs = function(x){scale(log10(x))})
+
+
+# fit vectors to NMDS Space
+set.seed(1)
+envfit_1<-envfit(NMDS1,env_data_to_vecfit,permu=1000)
+envfit_1_df<-data.frame(envfit_1$vectors$arrows,r2=envfit_1$vectors$r,p=envfit_1$vectors$pvals)
+
+envfit_sig<-envfit_1_df %>%
+  rownames_to_column("parameter") %>%
+  filter(p<=0.05)
+
+# extract arrow endpoints for biplot over NMDS
+envfit_sig<-envfit_sig %>%
+  mutate(x=NMDS1 * sqrt(r2),
+         y=NMDS2 *sqrt(r2),
+         z=NA)
+
+
+
+
+# plot nmds with taxa and vectors fit -------------------------------------
+
+nmds_plot_with_env_vectors<-ggplot(data=species_nmds_data,aes(x=x,y=y))+geom_point(aes(color=Phylum),size=3)+
+  scale_color_manual(values=vcols,guide=guide_legend(ncol = 1))+
+  theme_bw()+
+  geom_segment(data=envfit_sig,aes(x=0,xend=x,y=0,yend=y),
+               arrow = arrow(length = unit(0.5, "cm")),colour="black",inherit_aes=FALSE) +
+  geom_text(data=envfit_sig,aes(x=x,y=y-.05,label=parameter),size=3)+
+  theme_bw()+
+  labs(x="NMDS1",y="NMDS2")+
+  geom_label_repel(data=sample_nmds_data,aes(x=x,y=y,
+                                           label=well_no,
+                                           fill=factor(e_coli_PA)),
+                   alpha=0.7,fontface="bold",color="black",size=3,point.padding = unit(0,"lines"),
+                   box.padding=unit(0,"lines"))+
+  scale_fill_manual(name="E. coli field\ntest result",values=c("lightblue","red"),labels=c("Absent","Present"))+
+  theme(axis.text.x = element_text(angle = 0, hjust = 1,size=8, colour = "black"),
+        axis.text.y = element_text(angle = 90, hjust = 0.5,size=8,colour="black"),
+        legend.text=element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.key.size = unit(0.3, "cm"),
+        legend.background = element_rect(colour = "grey", fill=alpha("white",0.7)),
+        plot.margin=margin(0,0,0,0,"cm"),
+        plot.title = element_text(size=12,margin=margin(b=0),hjust=0.5))+
+  ggtitle("NMDS Plot With Taxa, Samples, and Significant Vector Fits")
+
+nmds_plot_with_env_vectors
+```
+
+
+# Spline fitting
+  
+Physiochemical parameters from the secondary matrix were also plotted as smoothed surfaces across the NMDS ordination space
+using thin-plate splines in a general additive model (GAM) framework using the ordisurf function (Vegan) (Oksanen et al., 2013).
+
+## Total Depth Spline Fitting in NMDS space
+I will just show one example where we spline Total Depth (TD)
+
+### Basic Visualization
+This is the basic visualization the ordisurf function calls. It's intersting, but if we can manipulate the data with ggplot we can make it more beautifuland compelling.
+
+```{r}
+
+td_oridsurf<-ordisurf(NMDS1,metadata_merged$TD,plot=TRUE)
+```
+
+
+### Pretty Visualization
+
+All you have to do is extract the values from the ordisurf object so that they can be used in ggplot. Here is the same example  of total depth (meters)
+Its pretty interesting to visualize how water depth relates to the ordination space.  
+
+```{R}
+
+extract.xyz <- function(obj) {
+  xy <- expand.grid(x = obj$grid$x, y = obj$grid$y)
+  xyz <- cbind(xy, c(obj$grid$z))
+  names(xyz) <- c("x", "y", "z")
+  return(xyz)
+}
+
+
+td_oridsurf_xyz<-extract.xyz(td_oridsurf)
+
+# we can use this attribute to make labels on graph look nice
+envfit_sig$TD_fill_tag<-ifelse(envfit_sig$parameter== "TD","strong","weak")
+
+
+depth_spline<-ggplot(data=td_oridsurf_xyz,aes(x=x,y=y,z=z))+stat_contour(aes(colour=..level..),binwidth=2)+
+  geom_point(data=species_nmds_data,aes(x=x,y=y))+
+  labs(x = "NMDS1", y = "NMDS2")+
+  geom_label_repel(data=sample_nmds_data,
+                   aes(x=x,y=y,label=well_no),
+                   fontface="bold",
+                   color="black",
+                   size=3,
+                   point.padding = unit(0,"lines"),
+                   box.padding=unit(0,"lines"))+
+  geom_segment(data=envfit_sig,aes(x=0,xend=x,y=0,yend=y),
+               arrow = arrow(length = unit(0.5, "cm")),
+               colour="grey",inherit_aes=FALSE) +
+  geom_label_repel(data=envfit_sig,aes(x=x*1.1,y=y*1.1,label=parameter,fill=TD_fill_tag, alpha=TD_fill_tag))+
+  ggtitle("Relationship between NMDS ordination and well depth (meters). Contours
+represent predicted total depth." )+
+  scale_alpha_discrete(range=c(0.8,0.3),guide=FALSE)+
+  scale_fill_manual(values=c("red","white"),guide=FALSE)+
+  scale_colour_gradient(high = "red", low = "black")+
+  theme_bw()
+
+
+depth_spline_plot_labeled<-direct.label(depth_spline,
+                            list("top.points", rot=75, cex=1))
+
+depth_spline_plot_labeled
+
+
+
+```
+
