@@ -444,7 +444,7 @@ using thin-plate splines in a general additive model (GAM) framework using the o
 I will just show one example where we spline Total Depth (TD)
 
 ### Basic Visualization
-This is the basic visualization the ordisurf function calls. It's intersting, but if we can manipulate the data with ggplot we can make it more beautifuland compelling.
+This is the basic visualization the ordisurf function calls. It's interesting, but if we can manipulate the data with ggplot we can make it more beautiful and compelling.
 
 ```{r}
 
